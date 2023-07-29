@@ -204,44 +204,56 @@ public class MavenLemminxExtension implements IXMLExtension {
 		}
 	}
 
-	private synchronized CompletableFuture<Void> getMavenInitializer() {
-		// Create thread which loads Maven component (plexus container, maven session, etc) which can take some time.
-		// We do this initialization on background to avoid breaking the XML syntax validation, XML based onXSD, XML completion based on XSD
+	private CompletableFuture<Void> getMavenInitializer() {
+		if (mavenInitializer != null) {
+			return mavenInitializer;
+		}
+		return getOrCreateMavenInitializer();
+	}
+	
+	private synchronized CompletableFuture<Void> getOrCreateMavenInitializer() {
+		if (mavenInitializer != null) {
+			return mavenInitializer;
+		}
+		// Create thread which loads Maven component (plexus container, maven session,
+		// etc) which can take some time.
+		// We do this initialization on background to avoid breaking the XML syntax
+		// validation, XML based onXSD, XML completion based on XSD
 		// while Maven component is initializing.
 		if (mavenInitializer == null) {
-			mavenInitializer = CompletableFuture.runAsync(() -> {
-				try {
-					this.container = newPlexusContainer();
-					mavenRequest = initMavenRequest(container, settings);
-					DefaultRepositorySystemSessionFactory repositorySessionFactory = container.lookup(DefaultRepositorySystemSessionFactory.class);
-					RepositorySystemSession repositorySystemSession = repositorySessionFactory.newRepositorySession(mavenRequest);
-					MavenExecutionResult mavenResult = new DefaultMavenExecutionResult();
-					// TODO: MavenSession is deprecated. Investigate for alternative
-					mavenSession = new MavenSession(container, repositorySystemSession, mavenRequest, mavenResult);
-					cache = new MavenProjectCache(mavenSession);
-					localRepositorySearcher = new LocalRepositorySearcher(mavenSession.getRepositorySession().getLocalRepository().getBasedir());
-					if (!settings.getCentral().isSkip()) {
-						centralSearcher = new RemoteCentralRepositorySearcher();
-					}
-					buildPluginManager = null;
-					mavenPluginManager = container.lookup(MavenPluginManager.class);
-					buildPluginManager = container.lookup(BuildPluginManager.class);
-					internalDidChangeWorkspaceFolders(this.initialWorkspaceFolders.stream().map(WorkspaceFolder::getUri).map(URI::create).toArray(URI[]::new), null);
-				} catch (Exception e) {
-					LOGGER.log(Level.SEVERE, e.getMessage(), e);
-					stop(currentRegistry);
-				}
-			});
-		}
-		if (isUnitTestMode()) {
-			// This code is for tests
-			try {
-				mavenInitializer.get();
-			} catch (InterruptedException | ExecutionException e) {
-				Thread.currentThread().interrupt();
-			}
+			if (isUnitTestMode()) {
+				doInitialize();
+				mavenInitializer = CompletableFuture.completedFuture(null);
+			} else
+				mavenInitializer = CompletableFuture.runAsync(() -> {
+					doInitialize();
+				});
 		}
 		return mavenInitializer;
+	}
+
+	private void doInitialize() {
+		try {
+			this.container = newPlexusContainer();
+			mavenRequest = initMavenRequest(container, settings);
+			DefaultRepositorySystemSessionFactory repositorySessionFactory = container.lookup(DefaultRepositorySystemSessionFactory.class);
+			RepositorySystemSession repositorySystemSession = repositorySessionFactory.newRepositorySession(mavenRequest);
+			MavenExecutionResult mavenResult = new DefaultMavenExecutionResult();
+			// TODO: MavenSession is deprecated. Investigate for alternative
+			mavenSession = new MavenSession(container, repositorySystemSession, mavenRequest, mavenResult);
+			cache = new MavenProjectCache(mavenSession);
+			localRepositorySearcher = new LocalRepositorySearcher(mavenSession.getRepositorySession().getLocalRepository().getBasedir());
+			if (!settings.getCentral().isSkip()) {
+				centralSearcher = new RemoteCentralRepositorySearcher();
+			}
+			buildPluginManager = null;
+			mavenPluginManager = container.lookup(MavenPluginManager.class);
+			buildPluginManager = container.lookup(BuildPluginManager.class);
+			internalDidChangeWorkspaceFolders(this.initialWorkspaceFolders.stream().map(WorkspaceFolder::getUri).map(URI::create).toArray(URI[]::new), null);
+		} catch (Exception e) {
+			LOGGER.log(Level.SEVERE, e.getMessage(), e);
+			stop(currentRegistry);
+		}
 	}
 
 	private MavenExecutionRequest initMavenRequest(PlexusContainer container, XMLMavenSettings options) throws Exception {
