@@ -38,16 +38,21 @@ import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
 import org.apache.maven.model.Dependency;
 import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.lemminx.commons.progress.ProgressMonitor;
+import org.eclipse.lemminx.commons.progress.ProgressSupport;
 import org.eclipse.lemminx.extensions.maven.MavenLemminxExtension;
 
 public class LocalRepositorySearcher {
 
 	private static final Logger LOGGER = Logger.getLogger(LocalRepositorySearcher.class.getName());
-
+	
 	private final File localRepository;
 
-	public LocalRepositorySearcher(File localRepository) {
+	private final ProgressSupport progressSupport;
+
+	public LocalRepositorySearcher(File localRepository, ProgressSupport progressSupport) {
 		this.localRepository = localRepository;
+		this.progressSupport = progressSupport;
 	}
 
 	private Map<File, CompletableFuture<Collection<Artifact>>> cache = new HashMap<>();
@@ -130,43 +135,56 @@ public class LocalRepositorySearcher {
 		return loadLocalArtifacts;
 	}
 
-	public Collection<Artifact> computeLocalArtifacts() throws IOException {
-		final Path repoPath = localRepository.toPath();
+	private Collection<Artifact> computeLocalArtifacts() throws IOException {
 		Map<String, Artifact> groupIdArtifactIdToVersion = new HashMap<>();
-		Files.walkFileTree(repoPath, Collections.emptySet(), 10, new SimpleFileVisitor<Path>() {
-			@Override
-			public FileVisitResult preVisitDirectory(Path file, BasicFileAttributes attrs) throws IOException {
-				if (file.getFileName().toString().charAt(0) == '.') {
+		final Path repoPath = localRepository.toPath();
+		ProgressMonitor progressMonitor = progressSupport != null ? progressSupport.createProgressMonitor() : null;
+		if (progressMonitor != null) {
+			progressMonitor.begin("Loading local artifacts from '" + repoPath + "'...", "", 100, null);
+		}
+		try {
+			Files.walkFileTree(repoPath, Collections.emptySet(), 10, new SimpleFileVisitor<Path>() {
+				@Override
+				public FileVisitResult preVisitDirectory(Path file, BasicFileAttributes attrs) throws IOException {
+					if (file.getFileName().toString().charAt(0) == '.') {
+						return FileVisitResult.SKIP_SUBTREE;
+					}
+					if (!Character.isDigit(file.getFileName().toString().charAt(0))) {
+						return FileVisitResult.CONTINUE;
+					}
+					Path artifactFolderPath = repoPath.relativize(file);
+					if (artifactFolderPath.getNameCount() < 3) {
+						// eg "maven-dependency-plugin/3.1.2"
+						return FileVisitResult.SKIP_SUBTREE;
+					}
+					ArtifactVersion version = new DefaultArtifactVersion(artifactFolderPath.getFileName().toString());
+					String artifactId = artifactFolderPath.getParent().getFileName().toString();
+					String groupId = artifactFolderPath.getParent().getParent().toString()
+							.replace(artifactFolderPath.getFileSystem().getSeparator(), ".");
+					if (!new File(file.toFile(), artifactId + '-' + version.toString() + ".pom").isFile()) {
+						return FileVisitResult.SKIP_SUBTREE;
+					}
+					String groupIdArtifactId = groupId + ':' + artifactId;
+					Artifact existingGav = groupIdArtifactIdToVersion.get(groupIdArtifactId);
+					boolean replace = existingGav == null;
+					if (existingGav != null) {
+						ArtifactVersion existingVersion = new DefaultArtifactVersion(existingGav.getVersion());
+						replace |= existingVersion.compareTo(version) < 0;
+						replace |= (existingVersion.toString().endsWith("-SNAPSHOT")
+								&& !version.toString().endsWith("-SNAPSHOT"));
+					}
+					if (replace) {
+						groupIdArtifactIdToVersion.put(groupIdArtifactId,
+								new DefaultArtifact(groupId, artifactId, null, version.toString()));
+					}
 					return FileVisitResult.SKIP_SUBTREE;
 				}
-				if (!Character.isDigit(file.getFileName().toString().charAt(0))) {
-					return FileVisitResult.CONTINUE;
-				}
-				Path artifactFolderPath = repoPath.relativize(file);
-				if (artifactFolderPath.getNameCount() < 3) {
-					// eg "maven-dependency-plugin/3.1.2"
-					return FileVisitResult.SKIP_SUBTREE;
-				}
-				ArtifactVersion version = new DefaultArtifactVersion(artifactFolderPath.getFileName().toString());
-				String artifactId = artifactFolderPath.getParent().getFileName().toString();
-				String groupId = artifactFolderPath.getParent().getParent().toString().replace(artifactFolderPath.getFileSystem().getSeparator(), ".");
-				if (!new File(file.toFile(), artifactId + '-' + version.toString() + ".pom").isFile()) {
-					return FileVisitResult.SKIP_SUBTREE;
-				}
-				String groupIdArtifactId = groupId + ':' + artifactId;
-				Artifact existingGav = groupIdArtifactIdToVersion.get(groupIdArtifactId);
-				boolean replace = existingGav == null;
-				if (existingGav != null) {
-					ArtifactVersion existingVersion = new DefaultArtifactVersion(existingGav.getVersion());
-					replace |= existingVersion.compareTo(version) < 0;
-					replace |= (existingVersion.toString().endsWith("-SNAPSHOT") && !version.toString().endsWith("-SNAPSHOT"));
-				}
-				if (replace) {
-					groupIdArtifactIdToVersion.put(groupIdArtifactId, new DefaultArtifact(groupId, artifactId, null, version.toString()));
-				}
-				return FileVisitResult.SKIP_SUBTREE;
+			});
+		} finally {
+			if (progressMonitor != null) {
+				progressMonitor.end("Local artifacts loaded");
 			}
-		});
+		}
 		return groupIdArtifactIdToVersion.values();
 	}
 
