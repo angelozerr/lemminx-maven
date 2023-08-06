@@ -80,6 +80,7 @@ import org.eclipse.lemminx.commons.progress.ProgressMonitor;
 import org.eclipse.lemminx.commons.progress.ProgressSupport;
 import org.eclipse.lemminx.dom.DOMDocument;
 import org.eclipse.lemminx.dom.DOMParser;
+import org.eclipse.lemminx.extensions.catalog.XMLCatalogURIResolverExtension;
 import org.eclipse.lemminx.extensions.maven.participants.codeaction.ExtractPropertyCodeAction;
 import org.eclipse.lemminx.extensions.maven.participants.codeaction.InlinePropertyCodeAction;
 import org.eclipse.lemminx.extensions.maven.participants.codeaction.MavenIdPartRemovalCodeAction;
@@ -90,6 +91,7 @@ import org.eclipse.lemminx.extensions.maven.participants.definition.MavenDefinit
 import org.eclipse.lemminx.extensions.maven.participants.diagnostics.MavenDiagnosticParticipant;
 import org.eclipse.lemminx.extensions.maven.participants.hover.MavenHoverParticipant;
 import org.eclipse.lemminx.extensions.maven.participants.rename.MavenPropertyRenameParticipant;
+import org.eclipse.lemminx.extensions.maven.schemas.MavenURIResolverExtension;
 import org.eclipse.lemminx.extensions.maven.searcher.LocalRepositorySearcher;
 import org.eclipse.lemminx.extensions.maven.searcher.RemoteCentralRepositorySearcher;
 import org.eclipse.lemminx.extensions.maven.utils.DOMUtils;
@@ -158,6 +160,8 @@ public class MavenLemminxExtension implements IXMLExtension {
 
 	private ProgressSupport progressSupport;
 
+	private MavenURIResolverExtension uiResolver;
+
 	@Override
 	public void doSave(ISaveContext context) {
 		if (context.getType() == SaveContextType.SETTINGS) {
@@ -208,6 +212,8 @@ public class MavenLemminxExtension implements IXMLExtension {
 			registerCodeActionParticipants(registry);
 			propertyRenameParticipant = new MavenPropertyRenameParticipant(this);
 			registry.registerRenameParticipant(propertyRenameParticipant);
+			uiResolver = new MavenURIResolverExtension(registry);
+			registry.getResolverExtensionManager().registerResolver(uiResolver);
 		} catch (Exception ex) {
 			LOGGER.log(Level.SEVERE, ex.getCause().toString(), ex);
 		}
@@ -529,6 +535,8 @@ public class MavenLemminxExtension implements IXMLExtension {
 		this.hoverParticipant = null;
 		registry.unregisterDefinitionParticipant(definitionParticipant);
 		this.definitionParticipant = null;
+		registry.getResolverExtensionManager().registerResolver(uiResolver);
+		uiResolver = null;
 		if (localRepositorySearcher != null) {
 			localRepositorySearcher.stop();
 			localRepositorySearcher = null;
